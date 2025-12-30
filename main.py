@@ -9,11 +9,7 @@ OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 GSHEET_SECRET = os.getenv("GSHEET_JSON")
 SHEET_NAME = "Biotech Job Scraper" 
 
-RESUME_CONTEXT = """
-Ph.D. in Chemical Engineering from Northwestern (Leonard Lab). 
-Expertise: Synthetic biology, mammalian cell programming (HEK, iPSCs), epigenetic regulation, 
-viral delivery (Lentivirus, AAV), and high-throughput robotic workflows. 
-"""
+RESUME_CONTEXT = "PhD in Chemical Engineering, Northwestern. Expert in Synthetic Biology and Cell Therapy."
 
 def run_job_search():
     try:
@@ -24,13 +20,12 @@ def run_job_search():
         print(f"Connection Error: {e}")
         return
 
-    # RELAXED PARAMETERS: 30 days (720 hours) and broader search
-    print("Searching for jobs from the last 30 days...")
+    print("Searching for jobs...")
     jobs = jobspy.scrape_jobs(
         site_name=["linkedin", "indeed", "google"],
         search_term='Scientist "cell therapy" OR "synthetic biology"',
         location="New York, NY",
-        results_wanted=50,
+        results_wanted=40,
         hours_old=720, 
     )
 
@@ -42,7 +37,15 @@ def run_job_search():
         if url in existing_urls:
             continue 
 
-        prompt = f"Role: {row['title']} at {row['company']}. JD: {row['description'][:2000]}. Return JSON: {{'score': 0-100, 'loc': 'neighborhood', 'cell_therapy': bool, 'summary': '1 sentence'}}"
+        # FIX 1: Handle missing descriptions (floats)
+        description = str(row['description']) if row['description'] else "No description provided"
+        
+        # FIX 2: Align 'neighborhood' key in prompt and response
+        prompt = f"""
+        Role: {row['title']} at {row['company']}. JD: {description[:2000]}. 
+        Return JSON with EXACTLY these keys:
+        {{ "score": 0-100, "neighborhood": "string", "cell_therapy": bool, "summary": "string" }}
+        """
         
         try:
             response = ai_client.chat.completions.create(
@@ -52,22 +55,22 @@ def run_job_search():
             )
             data = json.loads(response.choices[0].message.content)
 
-            # RELAXED FILTER: Score > 0 and no location restriction for the test
-            if data['score'] >= 0:
+            # Score > 0 means we catch everything for this test
+            if data.get('score', 0) >= 0:
                 sh.append_row([
                     "Test-Run", 
-                    data['score'], 
+                    data.get('score'), 
                     row['title'], 
                     row['company'], 
-                    data['neighborhood'], 
-                    "Yes" if data['cell_therapy'] else "No", 
+                    data.get('neighborhood', 'Unknown'), 
+                    "Yes" if data.get('cell_therapy') else "No", 
                     str(row['date_posted']), 
                     url,
-                    data['summary']
+                    data.get('summary', '')
                 ])
                 print(f"Added: {row['title']}")
         except Exception as e:
-            print(f"AI Error: {e}")
+            print(f"AI/Row Error: {e}")
 
 if __name__ == "__main__":
     run_job_search()
